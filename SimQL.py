@@ -4,6 +4,7 @@ from tqdm import tqdm
 import numpy as np
 from datetime import datetime
 
+from EconFunctions import demand
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
@@ -26,16 +27,6 @@ np.random.seed(66)
 price_hist = np.zeros((steps, n_firms * (runs if multirun else 1)))
 profit_hist = np.zeros((steps, n_firms * (runs if multirun else 1)))
 demand_hist = np.zeros((steps, n_firms * (runs if multirun else 1)))
-
-
-def demand(p_i, rest, num):
-    d = 1 - p_i + (1 / num) * rest * num
-    return d
-
-
-def profit(p_i, d):
-    pi = p_i * d
-    return pi
 
 
 class Firm(Agent):
@@ -170,7 +161,7 @@ if multirun:
     fig.subplots_adjust(left=0.1, bottom=0.1, right=0.9, top=0.9, wspace=0.4, hspace=0.4)
     fig.legend(labels, loc='upper right', bbox_transform=fig.transFigure)
 
-    plt.savefig('collusion/results_{}.png'.format(n_firms))
+    plt.savefig('collusion/results_{}_{}.png'.format(n_firms, runs))
 
     np.save('collusion/price.npy', price_hist)
     np.save('collusion/demand.npy', demand_hist)

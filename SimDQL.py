@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import math
 import gym
 import random
 import numpy as np
@@ -10,20 +9,7 @@ import matplotlib.pyplot as plt
 from mesa import Agent, Model
 from mesa.time import BaseScheduler
 
-
-def demand(p_i, rest, num):
-    d = 1 - p_i + ((1 / num) / (num - 1)) * rest * num
-    return d
-
-
-def profit(p_i, d):
-    pi = p_i * d
-    return pi
-
-
-env = gym.make('CartPole-v1')
-observation_space = env.observation_space.shape[0]
-action_space = env.action_space.n
+from EconFunctions import demand
 
 steps = 1000 * 500
 n_firms = 2
@@ -69,7 +55,7 @@ class Firm(Agent):
 
     def choose_action(self, observation):
         if random.random() < self.exploration_rate:
-            return env.action_space.sample()
+            return np.random.uniform(0, 1)
 
         state = torch.tensor(observation).float().detach()
         state = state.to(DEVICE)
@@ -131,12 +117,6 @@ class Firm(Agent):
         new_val = (1 - alpha) * self.qmatrix[state, action] + alpha * new_est
         return new_val
 
-    def observe(self, p_i, rest, rest_1):
-        action = np.searchsorted(actions, p_i)
-        state = np.searchsorted(states, rest)
-
-        self.qmatrix[state, action] = self.update(p_i, rest, rest_1)
-
 
 class CollusionModel(Model):
     def __init__(self, N):
@@ -157,21 +137,17 @@ class CollusionModel(Model):
         for a in self.schedule.agents:
             self.prices[0:2, a.unique_id] = a.price_list[0:2].reshape(2, )
         for a in self.schedule.agents:
-            rest = np.mean(np.delete(self.prices[0:2, :], a.unique_id, axis=1),
-                           axis=1)  # Here is where we lose information due to rounding the mean.
+            rest = np.mean(np.delete(self.prices[0:2, :], a.unique_id, axis=1), axis=1)  # Here is where we lose information due to rounding the mean.
             a.demand[0:2] = demand(a.price_list[0:2].reshape(2, ), rest, n_firms).reshape(2, 1)
             a.profit[0:2] = a.demand[0:2] * a.price_list[0:2]
 
     def step(self):
         for a in self.schedule.agents:
-            rest = np.mean(np.delete(self.prices[self.period - 2, :],
-                                     a.unique_id))  # Here is where we lose information due to rounding the mean.
-            rest_1 = np.mean(np.delete(self.prices[self.period - 1, :],
-                                       a.unique_id))  # Here is where we lose information due to rounding the mean.
+            rest = np.mean(np.delete(self.prices[self.period - 2, :], a.unique_id))  # Here is where we lose information due to rounding the mean.
+            rest_1 = np.mean(np.delete(self.prices[self.period - 1, :], a.unique_id))  # Here is where we lose information due to rounding the mean.
 
-            a.observe(a.price_list[self.period - 2], rest, rest_1)
-            a.act(np.mean(np.delete(self.prices[self.period, :],
-                                    a.unique_id)))  # Here is where we lose information due to rounding the mean.
+            a.choose_action(np.mean(np.delete(self.prices[self.period, :], a.unique_id)))
+            a.learn()
 
         for a in self.schedule.agents:
             rest = np.mean(np.delete(self.prices[self.period, :], a.unique_id))
@@ -184,8 +160,7 @@ class CollusionModel(Model):
             agent_id = 0
             for a in self.schedule.agents:
                 for time in range(steps - 2, steps):
-                    rest = np.mean(np.delete(self.prices[time, :],
-                                             a.unique_id))  # Here is where we lose information due to rounding the mean.
+                    rest = np.mean(np.delete(self.prices[time, :], a.unique_id))  # Here is where we lose information due to rounding the mean.
                     a.demand[time] = demand(a.price_list[time], rest, n_firms)
                     a.profit[time] = a.demand[time] * a.price_list[time]
 
@@ -198,8 +173,8 @@ class CollusionModel(Model):
 class Network(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.input_shape = env.observation_space.shape
-        self.action_space = action_space
+        self.input_shape = model.state_space
+        self.action_space = model.action_space
 
         self.fc1 = nn.Linear(*self.input_shape, FC1_DIMS)
         self.fc2 = nn.Linear(FC1_DIMS, FC2_DIMS)
@@ -221,10 +196,10 @@ class ReplayBuffer:
     def __init__(self):
         self.mem_count = 0
 
-        self.states = np.zeros((MEM_SIZE, *env.observation_space.shape), dtype=np.float32)
+        self.states = np.zeros((MEM_SIZE, *model.state_space), dtype=np.float32)
         self.actions = np.zeros(MEM_SIZE, dtype=np.int64)
         self.rewards = np.zeros(MEM_SIZE, dtype=np.float32)
-        self.states_ = np.zeros((MEM_SIZE, *env.observation_space.shape), dtype=np.float32)
+        self.states_ = np.zeros((MEM_SIZE, *model.state_space), dtype=np.float32)
         self.dones = np.zeros(MEM_SIZE, dtype=np.bool)
 
     def add(self, state, action, reward, state_, done):
@@ -251,84 +226,24 @@ class ReplayBuffer:
         return states, actions, rewards, states_, dones
 
 
-class DQN_Solver:
-    def __init__(self):
-        self.memory = ReplayBuffer()
-        self.exploration_rate = EXPLORATION_MAX
-        self.network = Network()
-
-    def choose_action(self, observation):
-        if random.random() < self.exploration_rate:
-            return env.action_space.sample()
-
-        state = torch.tensor(observation).float().detach()
-        state = state.to(DEVICE)
-        state = state.unsqueeze(0)
-        q_values = self.network(state)
-        return torch.argmax(q_values).item()
-
-    def learn(self):
-        if self.memory.mem_count < BATCH_SIZE:
-            return
-
-        states, actions, rewards, states_, dones = self.memory.sample()
-        states = torch.tensor(states, dtype=torch.float32).to(DEVICE)
-        actions = torch.tensor(actions, dtype=torch.long).to(DEVICE)
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(DEVICE)
-        states_ = torch.tensor(states_, dtype=torch.float32).to(DEVICE)
-        dones = torch.tensor(dones, dtype=torch.bool).to(DEVICE)
-        batch_indices = np.arange(BATCH_SIZE, dtype=np.int64)
-
-        q_values = self.network(states)
-        next_q_values = self.network(states_)
-
-        predicted_value_of_now = q_values[batch_indices, actions]
-        predicted_value_of_future = torch.max(next_q_values, dim=1)[0]
-
-        q_target = rewards + GAMMA * predicted_value_of_future * dones
-
-        loss = self.network.loss(q_target, predicted_value_of_now)
-        self.network.optimizer.zero_grad()
-        loss.backward()
-        self.network.optimizer.step()
-
-        self.exploration_rate *= EXPLORATION_DECAY
-        self.exploration_rate = max(EXPLORATION_MIN, self.exploration_rate)
-
-    def returning_epsilon(self):
-        return self.exploration_rate
-
-
-agent = DQN_Solver()
 model = CollusionModel(n_firms)
 
-for i in range(1, steps):
-    model.__init__()
+env = gym.make('CartPole-v1')
+observation_space = model.state_space
+action_space = model.action_space
+
+
+for j in range(1, runs):
+    model.__init__(n_firms)
+    for i in range(2, steps):
+        model.step()
     state = env.reset()[0]
     state = np.reshape(state, [1, observation_space])
-    score = 0
 
     while True:
         # env.render()
-        action = agent.choose_action(state)
         state_, reward, done, info = env.step(action)[0:4]
         state_ = np.reshape(state_, [1, observation_space])
         agent.memory.add(state, action, reward, state_, done)
         agent.learn()
         state = state_
-        score += reward
-
-        if done:
-            if score > best_reward:
-                best_reward = score
-            average_reward += score
-            print("Episode {} Average Reward {} Best Reward {} Last Reward {} Epsilon {}".format(i, average_reward / i,
-                                                                                                 best_reward, score,
-                                                                                                 agent.returning_epsilon()))
-            break
-
-        episode_number.append(i)
-        average_reward_number.append(average_reward / i)
-
-plt.plot(episode_number, average_reward_number)
-plt.show()
