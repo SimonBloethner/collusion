@@ -29,7 +29,7 @@ demand_hist = np.zeros((steps, n_firms * (runs if multirun else 1)))
 
 
 def demand(p_i, rest, num):
-    d = 1 - p_i + ((1 / num) / (num - 1)) * rest * num
+    d = 1 - p_i + (1 / num) * rest * num
     return d
 
 
