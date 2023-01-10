@@ -8,12 +8,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mesa import Agent, Model
 from mesa.time import BaseScheduler
+from datetime import datetime
 
 from EconFunctions import demand
 
 steps = 1000 * 500
 n_firms = 2
-runs = 2
+runs = 100
 multirun = True
 LEARNING_RATE = 0.0001
 MEM_SIZE = 10000
@@ -22,10 +23,13 @@ GAMMA = 0.95
 EXPLORATION_MAX = 1.0
 EXPLORATION_DECAY = 0.999
 EXPLORATION_MIN = 0.001
+state_space = 1
+actions_space = np.linspace(0, 1, 6)
 
 FC1_DIMS = 1024
 FC2_DIMS = 512
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print(DEVICE)
 
 best_reward = 0
 average_reward = 0
@@ -61,7 +65,8 @@ class Firm(Agent):
         state = state.to(DEVICE)
         state = state.unsqueeze(0)
         q_values = self.network(state)
-        return torch.argmax(q_values).item()
+        self.action = actions_space[torch.argmax(q_values).item()]
+        return self.action
 
     def learn(self):
         if self.memory.mem_count < BATCH_SIZE:
@@ -81,7 +86,7 @@ class Firm(Agent):
         predicted_value_of_now = q_values[batch_indices, actions]
         predicted_value_of_future = torch.max(next_q_values, dim=1)[0]
 
-        q_target = rewards + GAMMA * predicted_value_of_future * dones
+        q_target = rewards + GAMMA * predicted_value_of_future
 
         loss = self.network.loss(q_target, predicted_value_of_now)
         self.network.optimizer.zero_grad()
@@ -94,41 +99,17 @@ class Firm(Agent):
     def returning_epsilon(self):
         return self.exploration_rate
 
-    def act(self, rest):
-        self.state = np.searchsorted(states, rest)
-
-        if model.epsilon > np.random.uniform(0, 1):
-            action = np.random.choice(actions, 1)
-        else:
-            action = actions[np.argmax(self.qmatrix[self.state, :])]
-
-        self.price = action
-        self.action = np.searchsorted(actions, self.price)
-        self.price_list[model.period] = action
-        model.prices[model.period, self.unique_id] = action
-
-    def update(self, p_i, rest, rest_1):
-        action = np.searchsorted(actions, p_i)
-        state = np.searchsorted(states, rest)
-        next_state = np.searchsorted(states, rest_1)
-
-        pot_profit = p_i * demand(p_i, rest_1, n_firms)
-        new_est = self.profit[model.period - 2] + gamma * pot_profit + gamma ** 2 * np.max(self.qmatrix[next_state, :])
-        new_val = (1 - alpha) * self.qmatrix[state, action] + alpha * new_est
-        return new_val
-
 
 class CollusionModel(Model):
-    def __init__(self, N):
-        self.state_space = 1
-        self.action_space = 1
+    def __init__(self, N, state_space, action_space):
+        self.state_space = state_space
+        self.action_space = action_space
         self.num_agents = N
         self.period = 2
         # self.max_demand = max_demand
         self.demand_list = []
         self.prices = np.zeros([steps, n_firms])
-        self.epsilon = 1
-        self.theta = 1 - np.power(0.001, 1 / (0.5 * steps))
+
         # Create agents
         self.schedule = BaseScheduler(self)
         for i in range(self.num_agents):
@@ -143,18 +124,21 @@ class CollusionModel(Model):
 
     def step(self):
         for a in self.schedule.agents:
-            rest = np.mean(np.delete(self.prices[self.period - 2, :], a.unique_id))  # Here is where we lose information due to rounding the mean.
-            rest_1 = np.mean(np.delete(self.prices[self.period - 1, :], a.unique_id))  # Here is where we lose information due to rounding the mean.
+            rest = np.mean(np.delete(self.prices[self.period - 1, :], a.unique_id))  # Here is where we lose information due to rounding the mean.
 
-            a.choose_action(np.mean(np.delete(self.prices[self.period, :], a.unique_id)))
-            a.learn()
+            a.choose_action(rest)
 
         for a in self.schedule.agents:
             rest = np.mean(np.delete(self.prices[self.period, :], a.unique_id))
             a.demand[self.period] = demand(a.price_list[self.period], rest, n_firms)
             a.profit[self.period] = a.demand[self.period] * a.price_list[self.period]
 
-        self.epsilon = (1 - self.theta) ** self.period
+        for a in self.schedule.agents:
+            rest = np.mean(np.delete(self.prices[self.period - 1, :], a.unique_id))
+            state_ = np.mean(np.delete(self.prices[self.period, :], a.unique_id))
+            a.memory.add(rest, a.action, a.profit[self.period], state_, 0)
+            a.learn()
+
         self.period += 1
         if self.period == steps:
             agent_id = 0
@@ -173,10 +157,10 @@ class CollusionModel(Model):
 class Network(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.input_shape = model.state_space
-        self.action_space = model.action_space
+        self.input_shape = state_space
+        self.action_space = actions_space.shape[0]
 
-        self.fc1 = nn.Linear(*self.input_shape, FC1_DIMS)
+        self.fc1 = nn.Linear(self.input_shape, FC1_DIMS)
         self.fc2 = nn.Linear(FC1_DIMS, FC2_DIMS)
         self.fc3 = nn.Linear(FC2_DIMS, self.action_space)
 
@@ -195,12 +179,11 @@ class Network(torch.nn.Module):
 class ReplayBuffer:
     def __init__(self):
         self.mem_count = 0
-
-        self.states = np.zeros((MEM_SIZE, *model.state_space), dtype=np.float32)
+        self.states = np.zeros((MEM_SIZE, state_space), dtype=np.float32)
         self.actions = np.zeros(MEM_SIZE, dtype=np.int64)
         self.rewards = np.zeros(MEM_SIZE, dtype=np.float32)
-        self.states_ = np.zeros((MEM_SIZE, *model.state_space), dtype=np.float32)
-        self.dones = np.zeros(MEM_SIZE, dtype=np.bool)
+        self.states_ = np.zeros((MEM_SIZE, state_space), dtype=np.float32)
+        self.dones = np.zeros(MEM_SIZE)
 
     def add(self, state, action, reward, state_, done):
         mem_index = self.mem_count % MEM_SIZE
@@ -226,24 +209,50 @@ class ReplayBuffer:
         return states, actions, rewards, states_, dones
 
 
-model = CollusionModel(n_firms)
+model = CollusionModel(n_firms, state_space=state_space, action_space=actions_space.shape[0])
 
-env = gym.make('CartPole-v1')
-observation_space = model.state_space
-action_space = model.action_space
+start = datetime.now()
 
+if multirun:
+    for j in range(runs):
+        model.__init__(n_firms, state_space=state_space, action_space=actions_space.shape[0])
+        for i in range(2, steps):
+            model.step()
 
-for j in range(1, runs):
-    model.__init__(n_firms)
-    for i in range(2, steps):
-        model.step()
-    state = env.reset()[0]
-    state = np.reshape(state, [1, observation_space])
+    mean_price = []
+    for agent in range(n_firms):
+        mean_price.append(np.mean(price_hist[:, np.arange(agent, price_hist.shape[1], n_firms)], axis=1))
+    mean_price = np.transpose(np.asarray(mean_price))
 
-    while True:
-        # env.render()
-        state_, reward, done, info = env.step(action)[0:4]
-        state_ = np.reshape(state_, [1, observation_space])
-        agent.memory.add(state, action, reward, state_, done)
-        agent.learn()
-        state = state_
+    mean_demand = []
+    for agent in range(n_firms):
+        mean_demand.append(np.mean(demand_hist[:, np.arange(agent, demand_hist.shape[1], n_firms)], axis=1))
+    mean_demand = np.transpose(np.asarray(mean_demand))
+
+    mean_profit = []
+    for agent in range(n_firms):
+        mean_profit.append(np.mean(profit_hist[:, np.arange(agent, profit_hist.shape[1], n_firms)], axis=1))
+    mean_profit = np.transpose(np.asarray(mean_profit))
+
+    labels = ['Firm {}'.format(i) for i in np.arange(n_firms) + 1]
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True)
+    ax1.plot(mean_price, label=labels)
+    ax1.title.set_text('Price')
+    ax2.plot(mean_demand, label=labels)
+    ax2.title.set_text('Demand')
+    ax3.plot(mean_profit, label=labels)
+    ax3.title.set_text('Profit')
+    fig.subplots_adjust(left=0.1, bottom=0.1, right=0.9, top=0.9, wspace=0.4, hspace=0.4)
+    fig.legend(labels, loc='upper right', bbox_transform=fig.transFigure)
+
+    plt.savefig('collusion/results_{}_{}.png'.format(n_firms, runs))
+
+    np.save('collusion/price.npy', price_hist)
+    np.save('collusion/demand.npy', demand_hist)
+    np.save('collusion/profit.npy', profit_hist)
+
+    end = datetime.now()
+    print('Start time was: {}'.format(start))
+    print('End time was: {}'.format(end))
+    print('Execution time was {}'.format(datetime.now() - start))

@@ -14,7 +14,7 @@ import matplotlib.cm as cm
 # Hyper parameters
 alpha = 0.3
 gamma = 0.95
-n_firms = 5
+n_firms = 2
 steps = 500 * 1000
 runs = 100
 multirun = True
