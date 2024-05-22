@@ -7,5 +7,6 @@
     <mapping directory="$PROJECT_DIR$/testing/Youtube-Code-Repository" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/torchinterp1d" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/torchinterp1d/collusion" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/torchinterp1d/https:/github.com/SimonBloethner/collusion" vcs="Git" />
   </component>
 </project>
