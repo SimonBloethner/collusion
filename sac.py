@@ -38,10 +38,10 @@ class Agent(Agent):
         self.action = 0
 
     def choose_action(self, observation):
-        state = T.Tensor([observation]).to(self.actor.device)
+        state = T.Tensor(np.array([observation])).to(self.actor.device)
         actions, _ = self.actor.sample_normal(state, reparameterize=False)
-
-        return actions.cpu().detach().numpy()[0]
+        self.action = actions.cpu().detach().numpy()[0]
+        return self.action
 
     def remember(self, state, action, reward, new_state, done):
         self.memory.store_transition(state, action, reward, new_state, done)

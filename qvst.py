@@ -15,7 +15,7 @@ alpha = 0.3
 gamma = 0.95
 n_firms = 2
 steps = 500 * 1000
-runs = 1000
+runs = 20
 multirun = True
 k = 20
 states = np.linspace(0, 1, k)
@@ -39,7 +39,7 @@ def profit(p_i, p_j):
     return pi
 
 
-def tatonnement(delta_pi, delta_p, price):
+def tatonnement(delta_pi, delta_p, price, profit):
     if delta_pi > 0 and delta_p >= 0:
         price += increment
     if delta_pi > 0 and delta_p < 0:
@@ -48,7 +48,7 @@ def tatonnement(delta_pi, delta_p, price):
         price += increment
     if delta_pi < 0 and delta_p > 0:
         price -= increment
-    if delta_pi == 0:
+    if delta_pi == 0 and profit == 0:
         price = states[1]
     if price > 1:
         price = 1
@@ -73,7 +73,7 @@ class Firm(Agent):
 
     def act(self, p_j):
         if self.unique_id == 0:
-            action = tatonnement(self.profit[model.period - 1] - self.profit[model.period - 2], self.price_list[model.period - 1] - self.price_list[model.period - 2], self.price)
+            action = tatonnement(self.profit[model.period - 1] - self.profit[model.period - 2], self.price_list[model.period - 1] - self.price_list[model.period - 2], self.price, self.profit[model.period - 1])
         else:
             self.state = np.searchsorted(states, p_j)
 

@@ -6,24 +6,25 @@ import matplotlib.pyplot as plt
 np.random.seed(2)
 
 runs = 1
-steps = 1000
+steps = 1000 * 1000
 n_firms = 2
-lookback = 1
-state_space = (n_firms - 1) * lookback
+memory = 1
+state_space = n_firms * memory
 action_space = 1
 multirun = True
 load_checkpoint = False
+demand_scale = 100
 
 price_hist = np.zeros((steps, n_firms * (runs if multirun else 1)))
 profit_hist = np.zeros((steps, n_firms * (runs if multirun else 1)))
 demand_hist = np.zeros((steps, n_firms * (runs if multirun else 1)))
 
-model = CollusionModelSimultaneous(n_firms, state_space, action_space, steps, run=1, load_checkpoint=load_checkpoint)
+model = CollusionModelSimultaneous(n_firms, state_space, action_space, steps, run=0, load_checkpoint=load_checkpoint,demand_scale=demand_scale)
 
 start = datetime.now()
 
 for run in range(runs):
-    model.__init__(n_firms, state_space, action_space, steps, run=run, load_checkpoint=load_checkpoint)
+    model.__init__(n_firms, state_space, action_space, steps, run=run, load_checkpoint=load_checkpoint, demand_scale=demand_scale)
     for step in range(2, steps):
         model.step()
 
@@ -57,11 +58,11 @@ ax3.title.set_text('Profit')
 fig.subplots_adjust(left=0.1, bottom=0.1, right=0.9, top=0.9, wspace=0.4, hspace=0.4)
 fig.legend(labels, loc='upper right', bbox_transform=fig.transFigure)
 
-plt.savefig('collusion/figures/results_{}_{}.png'.format(n_firms, runs))
+plt.savefig('collusion/figures/sac_results_{}_{}.png'.format(n_firms, runs))
 
-np.save('collusion/price.npy', price_hist)
-np.save('collusion/demand.npy', demand_hist)
-np.save('collusion/profit.npy', profit_hist)
+np.save('collusion/outData/price_{}_{}_{}.npy'.format(n_firms, runs, demand_scale), price_hist)
+np.save('collusion/outData/demand_{}_{}_{}.npy'.format(n_firms, runs, demand_scale), demand_hist)
+np.save('collusion/outData/profit_{}_{}_{}.npy'.format(n_firms, runs, demand_scale), profit_hist)
 
 end = datetime.now()
 print('Start time was: {}'.format(start))

@@ -15,7 +15,7 @@ alpha = 0.3
 gamma = 0.95
 n_firms = 2
 steps = 500 * 1000
-runs = 1000
+runs = 100
 multirun = True
 continuous = True
 states = np.linspace(0, 1, 6)
@@ -107,7 +107,6 @@ class CollusionModel(Model):
             a = Firm(i, self)
             self.schedule.add(a)
 
-
     def step(self):
         # for a in self.schedule.agents:
         #     if self.period < 2:
@@ -143,7 +142,7 @@ model = CollusionModel(n_firms)
 start = datetime.now()
 
 if multirun:
-    for j in range(runs):
+    for j in tqdm(range(runs)):
         model.__init__(n_firms)
         for i in range(2, steps):
             model.step()
@@ -167,6 +166,14 @@ if multirun:
     np.save('collusion/price.npy', price_hist)
     np.save('collusion/demand.npy', demand_hist)
     np.save('collusion/profit.npy', profit_hist)
+
+    # Check ergodic properties.
+    time_avgs = profit_hist[:, np.arange(0, profit_hist.shape[1], 2)].mean(axis=0)
+    ensemble_avgs = profit_hist[:, np.arange(0, profit_hist.shape[1], 2)].mean(axis=1)
+
+    plt.hist(time_avgs, alpha=0.5, label='Time Averages')
+    plt.hist(ensemble_avgs, alpha=0.5, label='Ensemble Averages')
+    plt.yscale('log')
 
     end = datetime.now()
     print('Start time was: {}'.format(start))
