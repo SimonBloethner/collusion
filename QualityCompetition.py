@@ -1,135 +1,186 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.distributions import Normal
 import numpy as np
-import gym
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+import random
+
+
+np.random.seed(0)
+random.seed(0)
+torch.manual_seed(0)
 
 
 class PolicyNetwork(nn.Module):
-    def __init__(self, state_size, action_size):
+    def __init__(self, state_dim, action_dim):
         super(PolicyNetwork, self).__init__()
-        self.fc1 = nn.Linear(state_size, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.price_mean = nn.Linear(128, 1)
-        self.price_log_std = nn.Linear(128, 1)
-        # self.quality_mean = nn.Linear(128, 1)
-        # self.quality_log_std = nn.Linear(128, 1)
+        self.fc1 = nn.Linear(state_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.price_mean = nn.Linear(64, action_dim)
+        self.price_log_std = nn.Linear(64, action_dim)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
         price_mean = self.price_mean(x)
         price_log_std = self.price_log_std(x)
-        # quality_mean = self.quality_mean(x)
-        # quality_log_std = self.quality_log_std(x)
-        return price_mean, price_log_std    # , quality_mean, quality_log_std
+        return price_mean, price_log_std
 
 
 class ValueNetwork(nn.Module):
-    def __init__(self, state_size):
+    def __init__(self, state_dim):
         super(ValueNetwork, self).__init__()
-        self.fc1 = nn.Linear(state_size, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.value = nn.Linear(128, 1)
+        self.fc1 = nn.Linear(state_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.value = nn.Linear(64, 1)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
-        return self.value(x)
+        value = self.value(x)
+        return value
 
 
-class PPOAgent:
-    def __init__(self, state_size, action_size, lr=3e-4, gamma=0.99, clip_epsilon=0.2):
-        self.policy_net = PolicyNetwork(state_size, action_size)
-        self.value_net = ValueNetwork(state_size)
-        self.optimizer_policy = optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.optimizer_value = optim.Adam(self.value_net.parameters(), lr=lr)
+class Firm:
+    def __init__(self, number, state_dim, action_dim, lr=1e-5, gamma=0.99, eps_clip=0.2):
+        self.id = number
+        self.policy = PolicyNetwork(state_dim, action_dim)
+        self.value_function = ValueNetwork(state_dim)
+        self.optimizer_policy = optim.Adam(self.policy.parameters(), lr=lr)
+        self.optimizer_value = optim.Adam(self.value_function.parameters(), lr=lr)
         self.gamma = gamma
-        self.clip_epsilon = clip_epsilon
-        self.state_size = state_size
-        self.action_size = action_size
+        self.clip_epsilon = eps_clip
+        self.states, self.actions, self.log_probs, self.rewards, self.values = [], [], [], [], []
+        self.entropy_coef = 0.05
 
     def select_action(self, state):
-        state = torch.FloatTensor(state)
-        # price_mean, price_log_std, quality_mean, quality_log_std = self.policy_net(state)
-        price_mean, price_log_std = self.policy_net(state)
-        price_std = torch.exp(price_log_std)
-        # quality_std = torch.exp(quality_log_std)
-        price_dist = torch.distributions.Normal(price_mean, price_std)
-        # quality_dist = torch.distributions.Normal(quality_mean, quality_std)
-        price_action = price_dist.sample()
-        # quality_action = quality_dist.sample()
-        # action = torch.cat([price_action, quality_action], dim=-1)
-        action = torch.cat([price_action], dim=-1)
-        # log_prob = price_dist.log_prob(price_action) + quality_dist.log_prob(quality_action)
-        log_prob = price_dist.log_prob(price_action)  # + quality_dist.log_prob(quality_action)
-        return action, log_prob
+        state = torch.FloatTensor(state).unsqueeze(0)
+        price_mean, price_log_std = self.policy(state)
+        price_std = price_log_std.exp()
+        dist = Normal(price_mean, price_std)
+        action = dist.sample()
+        action = torch.sigmoid(action)
+        return action.item(), dist.log_prob(action).sum(dim=-1), dist.entropy().sum(dim=-1)
 
-    def compute_gae(self, rewards, values, next_values, dones):
-        advantages = []
-        gae = 0
-        for i in reversed(range(len(rewards))):
-            delta = rewards[i] + self.gamma * next_values[i] * (1 - dones[i]) - values[i]
-            gae = delta + self.gamma * gae
-            advantages.insert(0, gae)
-        return advantages
+    def normalize_rewards(self, rewards):
+        rewards = torch.tensor(rewards, dtype=torch.float32)
+        return (rewards - rewards.mean()) / (rewards.std() + 1e-8)
 
-    def update(self, trajectories):
-        states = torch.FloatTensor([t['state'] for t in trajectories])
-        actions = torch.FloatTensor([t['action'] for t in trajectories])
-        log_probs = torch.FloatTensor([t['log_prob'] for t in trajectories])
-        rewards = torch.FloatTensor([t['reward'] for t in trajectories])
-        next_states = torch.FloatTensor([t['next_state'] for t in trajectories])
-        dones = torch.FloatTensor([t['done'] for t in trajectories])
-        values = self.value_net(states).squeeze()
-        next_values = self.value_net(next_states).squeeze()
+    def update(self, rewards, log_probs, states, actions, values):
+        rewards = self.normalize_rewards(rewards).tolist()
+        returns = []
+        G = 0
+        for r in reversed(rewards):
+            G = r + self.gamma * G
+            returns.insert(0, G)
+        returns = torch.tensor(returns, dtype=torch.float32)
+        states = torch.stack(states)
+        actions = torch.tensor(actions, dtype=torch.float32)
+        old_log_probs = torch.stack(log_probs).detach()
 
-        advantages = self.compute_gae(rewards, values, next_values, dones)
-        advantages = torch.FloatTensor(advantages)
+        advantages = returns - values.detach()
 
         for _ in range(10):  # PPO usually performs multiple epochs of updates
-            new_log_probs = self.policy_net.get_log_probs(states, actions)
-            ratios = torch.exp(new_log_probs - log_probs)
+            # Recompute log_probs and values
+            price_mean, price_log_std = self.policy(states)
+            price_std = price_log_std.exp()
+            dist = Normal(price_mean, price_std)
+            new_log_probs = dist.log_prob(actions).sum(dim=-1)
+            entropy = dist.entropy().sum(dim=-1)
+
+            # Compute ratios
+            ratios = torch.exp(new_log_probs - old_log_probs)
+
+            # Compute surrogate losses
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages
             policy_loss = -torch.min(surr1, surr2).mean()
-            value_loss = (rewards + self.gamma * next_values - values).pow(2).mean()
 
+            # Compute value loss
+            new_values = self.value_function(states)
+            value_loss = (returns - new_values).pow(2).mean()
+
+            # Update policy
             self.optimizer_policy.zero_grad()
-            policy_loss.backward()
+            policy_loss.backward(retain_graph=True)
             self.optimizer_policy.step()
 
+            # Update value function
             self.optimizer_value.zero_grad()
             value_loss.backward()
             self.optimizer_value.step()
 
-    def store_trajectory(self, state, action, log_prob, reward, next_state, done):
-        trajectory = {
-            'state': state,
-            'action': action,
-            'log_prob': log_prob,
-            'reward': reward,
-            'next_state': next_state,
-            'done': done
-        }
-        return trajectory
 
-# Example usage
-env = gym.make('YourCustomEnv-v0')
-agent = PPOAgent(state_size=4, action_size=2)
+class CollusionModel():
+    def __init__(self, n, iterations):
+        self.num_agents = n
+        self.period = 3
+        self.demand_list = []
+        self.schedule = [Firm(number=firm, action_dim=1, state_dim=3) for firm in range(self.num_agents)]
+        self.prices = np.zeros((iterations + 2, n))
+        self.demand = np.zeros((iterations + 2, n))
+        self.profits = np.zeros((iterations + 2, n))
+        self.device = 'cpu'
 
-for episode in range(1000):
-    state = env.reset()
-    episode_rewards = []
-    trajectories = []
-    done = False
-    while not done:
-        action, log_prob = agent.select_action(state)
-        next_state, reward, done, _ = env.step(action.numpy())
-        trajectory = agent.store_trajectory(state, action, log_prob, reward, next_state, done)
-        trajectories.append(trajectory)
-        episode_rewards.append(reward)
-        state = next_state
+    def step(self):
+        if self.period == 10159:
+            print('!')
+        a = self.period % 2
+        done = False
+        state = [self.prices[self.period - 3, a], self.prices[self.period - 2, 0 ** a], self.prices[self.period - 4, 0 ** a]]
 
-    agent.update(trajectories)
-    print(f'Episode {episode} reward: {sum(episode_rewards)}')
+        action, log_prob, entropy = self.schedule[a].select_action(state)
+
+        self.prices[[self.period - 2, self.period - 1], a] = action
+
+        self.demand[self.period - 2, :] = demand(self.prices[self.period - 2, 0], self.prices[self.period - 2, 1])
+        self.profits[self.period - 2, :] = profit(self.prices[self.period - 2, 0], self.prices[self.period - 2, 1])
+
+        next_state = np.array([action, self.prices[self.period - 2, 0 ** a], self.prices[self.period - 1, 0 ** a]])
+
+        value = self.schedule[a].value_function(torch.FloatTensor(state).unsqueeze(0))
+
+        reward = self.profits[self.period - 2, a]
+
+        self.schedule[a].states.append(torch.FloatTensor(state))
+        self.schedule[a].actions.append(action)
+        self.schedule[a].log_probs.append(log_prob)
+        self.schedule[a].rewards.append(reward)
+        self.schedule[a].values.append(value)
+
+        if len(self.schedule[a].rewards) > 10:
+            self.schedule[a].update(self.schedule[a].rewards, self.schedule[a].log_probs, self.schedule[a].states, self.schedule[a].actions, torch.cat(self.schedule[a].values).squeeze())
+            self.schedule[a].states, self.schedule[a].actions, self.schedule[a].log_probs, self.schedule[a].rewards, self.schedule[a].values = [], [], [], [], []
+
+        self.period += 1
+
+
+def demand(p_i, p_j):
+    p = np.array([[p_i, p_j], [p_j, p_i]])
+    d = 1 - p + 0.5 * p
+    return d[:, 0]
+
+
+def profit(p_i, p_j):
+    pi = p_i * demand(p_i, p_j)
+    return pi
+
+
+iterations = 10 ** 5
+model = CollusionModel(n=2, iterations=iterations)
+
+for episode in tqdm(range(iterations)):
+    model.step()
+
+labels = ['Firm 1', 'Firm 2']
+fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True)
+ax1.plot(model.prices[2:-1], label=['Firm 1', 'Firm 2'])
+ax1.title.set_text('Price')
+ax2.plot(model.demand[2:-1], label=['Firm 1', 'Firm 2'])
+ax2.title.set_text('Demand')
+ax3.plot(model.profits[2:-1], label=['Firm 1', 'Firm 2'])
+ax3.title.set_text('Profit')
+fig.subplots_adjust(left=0.1, bottom=0.1, right=0.9, top=0.9, wspace=0.4, hspace=0.4)
+fig.legend(labels, loc='upper right', bbox_transform=fig.transFigure)
