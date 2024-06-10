@@ -275,14 +275,22 @@ class CollusionModel():
 
         action = []
         for a in range(len(self.schedule)):
-            state = [self.prices[self.period - 1, a], self.prices[self.period - 1, 0 ** a], self.prices[self.period - 2, 0 ** a]]
+            state = [self.prices[self.period - 1, a]]
+            mask = np.ones(self.num_agents, dtype=bool)
+            mask[a] = False
+            p_ = np.max(self.prices[self.period - 1, mask])
+            p__ = np.max(self.prices[self.period - 2, mask])
+            # state_ = [[self.prices[self.period - 1, a_], self.prices[self.period - 2, a_]] for a_ in np.arange(self.num_agents)[np.r_[0:a, a+1:self.num_agents]]]
+            # state_ = sum(state_, [])
+            state_ = [p_, p__]
+            state.extend(state_)
             action.append(self.schedule[a].select_action(state)[0])
         done = False
 
         self.prices[self.period, :] = action
 
-        self.demand[self.period, :] = demand(action[0], action[1])
-        self.profits[self.period, :] = profit(action[0], action[1])
+        self.demand[self.period, :] = demand(action)
+        self.profits[self.period, :] = profit(action)
 
         reward = self.profits[self.period, :]
 
@@ -300,17 +308,17 @@ class CollusionModel():
         self.period += 1
 
 
-def demand(p_i, p_j):
-    p = [p_i, p_j]
-    d = np.array([1 - p[a] + 0.5 * p[0 ** a] for a in range(len(p))])
+def demand(p):
+    d = [1 - p[firm] + 0.5 * np.max(p[:firm] + p[firm+1:]) for firm in range(len(p))]
     return d
 
 
-def profit(p_i, p_j):
-    pi = np.array([p_i, p_j]) * demand(p_i, p_j)
+def profit(p):
+    pi = np.array(p) * demand(p)
     return pi
 
 
+num_agents = 5
 has_continuous_action_space = True  # continuous action space; else discrete
 
 max_ep_len = 1000  # max timesteps in one episode
@@ -320,7 +328,7 @@ max_training_timesteps = int(1000000)  # break training loop if timeteps > max_t
 action_std = 0.6  # starting std for action distribution (Multivariate Normal)
 action_std_decay_rate = 0.05  # linearly decay action_std (action_std = action_std - action_std_decay_rate)
 min_action_std = 0.1  # minimum action_std (stop decay after action_std <= min_action_std)
-action_std_decay_freq = int(2 * 10 ** 4)  # action_std decay frequency (in num timesteps)
+action_std_decay_freq = int(3 * 10 ** 4)  # action_std decay frequency (in num timesteps)
 update_timestep = max_ep_len * 4  # update policy every n timesteps
 K_epochs = 80  # update policy for K epochs in one PPO update
 
@@ -332,6 +340,7 @@ lr_critic = 0.001  # learning rate for critic network
 
 random_seed = 0  # set random seed if required (0 = no random seed)
 
+state_dim = 1 + (num_agents - 1) * 2
 state_dim = 3
 
 # action space dimension
@@ -345,30 +354,32 @@ else:
 
 
 iterations = 1
-episodes = 2000000
-model = CollusionModel(n=2, iterations=episodes)
-strg_price = np.empty((episodes, 2, iterations))
-strg_demand = np.empty((episodes, 2, iterations))
-strg_profit = np.empty((episodes, 2, iterations))
+episodes = 2 * 10 ** 5
+model = CollusionModel(n=num_agents, iterations=episodes)
+strg_price = np.empty((episodes, num_agents, iterations))
+strg_demand = np.empty((episodes, num_agents, iterations))
+strg_profit = np.empty((episodes, num_agents, iterations))
 
-for it in tqdm(range(iterations)):
-    for episode in range(episodes):
+for it in range(iterations):
+    for episode in tqdm(range(episodes)):
+        if episode == 199900:
+            print('!')
         model.step()
     strg_price[:, :, it] = model.prices
     strg_demand[:, :, it] = model.demand
     strg_profit[:, :, it] = model.profits
 
-    model.initialize(iterations=episodes, n=2)
+    model.initialize(iterations=episodes, n=num_agents)
 
 
 slice_ = iterations - 1
-labels = ['Firm 1', 'Firm 2']
+labels = ['Firm {}'.format(i) for i in range(num_agents)]
 fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True)
-ax1.plot(strg_price[:, :, slice_], label=['Firm 1', 'Firm 2'])
+ax1.plot(strg_price[:, :, slice_], label=labels)
 ax1.title.set_text('Price')
-ax2.plot(strg_demand[:, :, slice_], label=['Firm 1', 'Firm 2'])
+ax2.plot(strg_demand[:, :, slice_], label=labels)
 ax2.title.set_text('Demand')
-ax3.plot(strg_profit[:, :, slice_], label=['Firm 1', 'Firm 2'])
+ax3.plot(strg_profit[:, :, slice_], label=labels)
 ax3.title.set_text('Profit')
 fig.subplots_adjust(left=0.1, bottom=0.1, right=0.9, top=0.9, wspace=0.4, hspace=0.4)
 fig.legend(labels, loc='upper right', bbox_transform=fig.transFigure)
