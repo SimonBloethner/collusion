@@ -339,6 +339,7 @@ lr_actor = 0.0003  # learning rate for actor network
 lr_critic = 0.001  # learning rate for critic network
 
 random_seed = 0  # set random seed if required (0 = no random seed)
+checkpoint_path = '/Users/Simon/Documents/Projects/EWF/Research/PhD/Ergodicity Economics/IOxEE/programs/models'
 
 state_dim = 1 + (num_agents - 1) * 2
 state_dim = 3
@@ -349,10 +350,6 @@ if has_continuous_action_space:
 else:
     action_dim = 1
 
-
-# initialize a PPO agent
-
-
 iterations = 1
 episodes = 2 * 10 ** 5
 model = CollusionModel(n=num_agents, iterations=episodes)
@@ -362,8 +359,6 @@ strg_profit = np.empty((episodes, num_agents, iterations))
 
 for it in range(iterations):
     for episode in tqdm(range(episodes)):
-        if episode == 199900:
-            print('!')
         model.step()
     strg_price[:, :, it] = model.prices
     strg_demand[:, :, it] = model.demand
