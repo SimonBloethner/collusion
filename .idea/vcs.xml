@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="VcsDirectoryMappings">
+    <mapping directory="$USER_HOME$/Documents/Projects/EWF/Research/PhD/Ergodicity Economics/IOxEE" vcs="Git" />
+    <mapping directory="$USER_HOME$/Documents/Projects/EWF/Research/PhD/Ergodicity Economics/IOxEE/programs" vcs="Git" />
+    <mapping directory="$USER_HOME$/Documents/Projects/EWF/Research/PhD/Ergodicity Economics/IOxEE/programs/https:/github.com/SimonBloethner/conglomerates.git" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/.." vcs="Git" />
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/Algorithmic-Collusion-Replication" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/testing/Youtube-Code-Repository" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/torchinterp1d" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/torchinterp1d/collusion" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/torchinterp1d/https:/github.com/SimonBloethner/collusion" vcs="Git" />
